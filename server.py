@@ -1,8 +1,8 @@
 import json, base64, os, webbrowser
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from parser import learn_template
-from vision import parse_vision,test_vision_connection
+from parser import learn_template, parse_pdf
+from vision import parse_vision,test_vision_connection,ocr_jd
 from agent import propose, environment_config, checked_config, test_connection, list_models
 CONFIG=environment_config()
 VISION_CONFIG={'key':os.getenv('RESUME_VISION_API_KEY',CONFIG['key']), 'base':os.getenv('RESUME_VISION_BASE_URL',CONFIG['base']).rstrip('/'), 'model':os.getenv('RESUME_VISION_MODEL','gpt-6.1-terra' if CONFIG['base']=='https://api.openai.com/v1' else CONFIG['model'])}
@@ -17,6 +17,14 @@ def save_slot(payload,previous):
     if not payload.get('key','').strip() and (not previous['key'] or payload.get('base','').strip().rstrip('/')!=previous['base']):
         c=checked_config({**payload,'key':'validation-only'},previous);c['key']='';return c
     return checked_config(payload,previous)
+def recognize_pdf(payload, config):
+    mode=payload.get('mode','vision')
+    if mode not in ('vision','local'): raise ValueError('未知简历识别方式')
+    raw=base64.b64decode(payload['data'],validate=True)
+    name=str(payload.get('name','resume.pdf'))
+    result=parse_pdf(raw,name) if mode=='local' else parse_vision(raw,name,config)
+    result['recognition']=mode
+    return result
 STATIC=Path(__file__).parent/'static'
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -33,8 +41,9 @@ class Handler(BaseHTTPRequestHandler):
             if length>30*1024*1024: raise ValueError('请求过大')
             p=json.loads(self.rfile.read(length));
             if self.path in ('/api/import','/api/template'):
-                result=parse_vision(base64.b64decode(p['data'],validate=True),str(p.get('name','resume.pdf')),VISION_CONFIG.copy())
+                result=recognize_pdf(p,VISION_CONFIG.copy())
                 if self.path=='/api/template': result=learn_template(result)
+            elif self.path=='/api/jd/ocr': result=ocr_jd(base64.b64decode(p['data'],validate=True),VISION_CONFIG.copy())
             elif self.path=='/api/settings':
                 new=save_slot(p['jd'],CONFIG); vision=save_slot(p['vision'],VISION_CONFIG); CONFIG=new; VISION_CONFIG=vision; result=public_config()
             elif self.path=='/api/settings/models':

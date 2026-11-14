@@ -41,7 +41,7 @@ def list_models(config):
 
 
 def call_model(config, messages):
-    if not config['key']: raise ValueError('请先打开右上角设置，配置模型 API。')
+    if not config['key']: raise ValueError('请先打开侧边栏设置，配置模型 API。')
     config=checked_config(config,config)
     body={'model':config['model'],'messages':messages,'response_format':{'type':'json_object'}}
     if 'dashscope' in urlsplit(config['base']).hostname or urlsplit(config['base']).hostname.endswith('.maas.aliyuncs.com'): body['enable_thinking']=False

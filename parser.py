@@ -126,9 +126,18 @@ def parse_pdf(data, filename='resume.pdf'):
                 row_top=min(b['bbox'][1] for b in row)
                 row_bottom=max(b['bbox'][3] for b in row)
                 gap=round(max(0,row_top-(last if last is not None else (top if region=='header' or not head else max([v['bbox'][3] for v in head]+([photo['bbox'][3]] if photo else []))))),2)
+                # The PDF bbox includes font ascenders/descenders and may also
+                # include intentional fixed-layout whitespace. Do not carry large
+                # fixed gaps into the editable personal-information header.
+                if region=='header' and last is not None:
+                    sizes=[r['size'] for b in row for r in b['runs']]
+                    gap=round(min(gap,4,max(0,min(sizes,default=10)*.25)),2)
                 for b in row:
                     box=b['bbox']
                     b['gap']=gap
+                    if region=='header' and b.get('sourceLines',1)==1 and b['runs']:
+                        size=max(r['size'] for r in b['runs'])
+                        b['lineHeight']=round(size*1.12,2)
                     b['indent']=round(max(0,box[0]-left),2)
                     if region=='body' and b['kind']=='heading':
                         for d in page.get_drawings():

@@ -19,6 +19,28 @@ class Core(unittest.TestCase):
         p.insert_text((30,45),'Name',fontsize=30);p.insert_text((200,45),'Target: Operations',fontsize=12)
         p.insert_text((30,75),'Education',fontsize=12);p.insert_text((30,100),'University',fontsize=10)
         out=parse_pdf(d.tobytes());d.close();header=[b for b in out['pages'][0]['blocks'] if b['region']=='header'];self.assertEqual(len(header),2);self.assertTrue(header[0].get('rowId'));self.assertEqual(header[0]['rowId'],header[1]['rowId'])
+    def test_compact_local_header_spacing(self):
+        d=fitz.open();p=d.new_page(width=595,height=842)
+        for x,y,t,size in [(30,65,'Name',36),(160,60,'Target: Operations',14),(30,102,'Available five days per week',10),(30,128,'Education',12),(30,145,'University',10)]:
+            p.insert_text((x,y),t,fontsize=size)
+        page=parse_pdf(d.tobytes())['pages'][0];d.close()
+        name,target,availability,heading,school=page['blocks']
+        self.assertEqual(name['rowId'],target['rowId'])
+        self.assertEqual(name['runs'][0]['size'],36)
+        self.assertEqual(name['lineHeight'],40.32)
+        self.assertLessEqual(availability['gap'],2.5)
+        self.assertGreater(heading['gap'],4)  # body section spacing is not compressed
+        self.assertEqual(availability['runs'][0]['text'],'Available five days per week')
+    def test_local_header_keeps_wrapped_text(self):
+        d=fitz.open();p=d.new_page(width=595,height=842)
+        p.insert_text((30,45),'Name',fontsize=30)
+        p.insert_text((30,75),'Available for six months',fontsize=10)
+        p.insert_text((30,110),'Education',fontsize=12)
+        p.insert_text((30,130),'University',fontsize=10)
+        blocks=parse_pdf(d.tobytes())['pages'][0]['blocks'];d.close()
+        self.assertLessEqual(blocks[1]['gap'],2.5)
+        self.assertEqual(blocks[1]['region'],'header')
+        self.assertGreater(blocks[2]['gap'],4)
     def test_label_and_soft_wrap(self):
         from parser import split_text_block
         def ln(y,text,x1):
