@@ -14,6 +14,17 @@ class Core(unittest.TestCase):
         for group in (blocks[:3],blocks[3:]):
             self.assertEqual(len({b['rowId'] for b in group}),1)
             self.assertEqual(len({b['gap'] for b in group}),1)
+    def test_mixed_size_header_same_row(self):
+        d=fitz.open();p=d.new_page(width=595,height=842)
+        p.insert_text((30,45),'Name',fontsize=30);p.insert_text((200,45),'Target: Operations',fontsize=12)
+        p.insert_text((30,75),'Education',fontsize=12);p.insert_text((30,100),'University',fontsize=10)
+        out=parse_pdf(d.tobytes());d.close();header=[b for b in out['pages'][0]['blocks'] if b['region']=='header'];self.assertEqual(len(header),2);self.assertTrue(header[0].get('rowId'));self.assertEqual(header[0]['rowId'],header[1]['rowId'])
+    def test_label_and_soft_wrap(self):
+        from parser import split_text_block
+        def ln(y,text,x1):
+            return {'bbox':(30,y,x1,y+12),'spans':[{'text':text,'bbox':(30,y,x1,y+12),'origin':(30,y+10),'size':10,'font':'Chinese','flags':0,'color':0}]}
+        raw={'bbox':(30,20,550,76),'lines':[ln(20,'多形式内容创作：负责内容制作与发布',550),ln(34,'持续运营多个平台。',160),ln(48,'传播表现：累计获得多个平台反馈',550),ln(62,'并统计各项数据。',150)]}
+        bs=split_text_block(raw);self.assertEqual(len(bs),2);self.assertEqual(bs[0]['sourceLines'],2);self.assertEqual(bs[1]['sourceLines'],2);self.assertTrue(bs[1]['runs'][0]['text'].startswith('传播表现：'))
     def test_guard(self):
         orig=[{'id':'a','text':'Analyzed 496 surveys','region':'body','kind':'paragraph'},{'id':'b','text':'Name','region':'header','kind':'paragraph'}];out=validate({'edits':[{'id':'a','action':'rewrite','text':'Analyzed 996 surveys','evidence':['Analyzed 496 surveys']},{'id':'b','action':'rewrite','text':'Other','evidence':['Name']}]},orig,orig);self.assertEqual(len(out['edits']),1);self.assertTrue(out['edits'][0]['flags'])
 if __name__=='__main__':unittest.main()

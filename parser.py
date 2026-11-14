@@ -16,34 +16,64 @@ def separator(a,b):
 def append(runs, s):
     if runs and all(runs[-1].get(k)==v for k,v in s.items() if k!='text'): runs[-1]['text'] += s['text']
     else: runs.append(s.copy())
+def union(a,b):
+    return [min(a[0],b[0]),min(a[1],b[1]),max(a[2],b[2]),max(a[3],b[3])]
+
+def same_line(a,b):
+    # Baselines differ for mixed fonts (e.g. name + job target); compare vertical overlap too.
+    aa,bb=a['bbox'],b['bbox']; ha,hb=aa[3]-aa[1],bb[3]-bb[1]
+    overlap=min(aa[3],bb[3])-max(aa[1],bb[1])
+    baseline=abs(a.get('baseline',aa[3])-b.get('baseline',bb[3]))
+    return (aa[2]<=bb[0]+.5 or bb[2]<=aa[0]+.5) and (overlap>=.55*min(ha,hb) or baseline<=max(2,min(ha,hb)*.23))
+
+def visual_lines(raw):
+    # Split large horizontal whitespace between independently positioned spans, not inline bold runs.
+    for line in raw['lines']:
+        spans=sorted((s for s in line['spans'] if s['text']),key=lambda s:s['bbox'][0]); groups=[]
+        for span in spans:
+            if not groups or span['bbox'][0]-groups[-1][-1]['bbox'][2]>max(9,min(span['size'],groups[-1][-1]['size'])*1.25): groups.append([span])
+            else: groups[-1].append(span)
+        for ss in groups:
+            bbox=list(ss[0]['bbox'])
+            for span in ss[1:]: bbox=union(bbox,span['bbox'])
+            text=''.join(s['text'] for s in ss).strip()
+            if text: yield ss,bbox,text
+
+def new_label(spans,text):
+    # Explicit paragraph labels, including bold Chinese labels such as “传播表现：”.
+    return bool(re.match(r'^[•●▪◆·]|^\d+[、.]',text) or re.match(r'^[^：:。！？；;\n]{1,20}[：:]',text) and (spans[0].get('flags',0)&16 or re.match(r'^[\u4e00-\u9fff]{2,12}[：:]',text)))
+
 def split_text_block(raw):
     groups=[]
-    for line in raw['lines']:
-        spans=[s for s in line['spans'] if s['text']]
-        if not spans: continue
-        bbox=line['bbox']; text=''.join(s['text'] for s in spans).strip(); heading=bool(HEAD.fullmatch(text))
-        if not text: continue
-        size=max(s['size'] for s in spans)
+    lines=list(visual_lines(raw))
+    for spans,bbox,text in lines:
+        heading=bool(HEAD.fullmatch(text)); size=max(s['size'] for s in spans)
+        baseline=statistics.median(s.get('origin',(0,bbox[3]))[1] for s in spans)
         prev=groups[-1] if groups else None
-        # A separate paragraph on a large vertical gap, changed indent, bullet or heading.
-        new=not prev or heading or prev['kind']=='heading' or bbox[1]-prev['last'][3]>size*.65 or abs(bbox[0]-prev['last'][0])>max(size*1.6,18) or bool(re.match(r'^[•●▪◆·]|^\d+[、.]',text))
+        # Do not collapse short labels, manually separated paragraphs, or horizontally positioned cells.
+        last=prev.get('last') if prev else None
+        same=prev and same_line({'bbox':last,'baseline':prev['lastBaseline']},{'bbox':bbox,'baseline':baseline})
+        edge=raw['bbox'][2]
+        short_end=prev and edge-last[2]>size*2.2 and bool(re.search(r'[。！？；.!?;]\s*$',plain(prev)))
+        new=not prev or heading or prev['kind']=='heading' or same or bbox[1]-last[3]>size*.55 or abs(bbox[0]-last[0])>max(size*1.3,14) or new_label(spans,text) or short_end
         if new:
-            prev={'id':uid(),'kind':'heading' if heading else 'paragraph','runs':[],'bbox':list(bbox),'last':bbox,'lineHeight':round(max(bbox[3]-bbox[1],size*1.12),2)}; groups.append(prev)
+            prev={'id':uid(),'kind':'heading' if heading else 'paragraph','runs':[],'bbox':list(bbox),'last':bbox,'lastBaseline':baseline,'baseline':baseline,'sourceLines':1,'lineHeight':round(max(bbox[3]-bbox[1],size*1.12),2)}; groups.append(prev)
         else:
-            prev['lineHeight']=round(max(prev['lineHeight'],bbox[1]-prev['last'][1]),2)
-            prev['bbox']=[min(prev['bbox'][0],bbox[0]),min(prev['bbox'][1],bbox[1]),max(prev['bbox'][2],bbox[2]),max(prev['bbox'][3],bbox[3])]
+            prev['sourceLines']+=1
+            prev['lineHeight']=round(max(prev['lineHeight'],bbox[1]-last[1]),2)
+            prev['bbox']=union(prev['bbox'],bbox)
             sep=separator(plain(prev),spans[0]['text'])
             if sep: append(prev['runs'],dict(prev['runs'][-1],text=sep))
-        for s in spans: append(prev['runs'],dict(style(s),text=s['text']))
-        prev['last']=bbox
-    for b in groups: b.pop('last',None)
+        for span in spans: append(prev['runs'],dict(style(span),text=span['text']))
+        prev['last']=bbox; prev['lastBaseline']=baseline
+    for b in groups: b.pop('last',None); b.pop('lastBaseline',None)
     return groups
 
 def assign_rows(blocks):
-    """Keep horizontally separated text on the same visual line in one flow row."""
+    """Group independent same-line cells in header and body; never group multiline paragraphs."""
     rows=[]
     for b in sorted(blocks,key=lambda b:(b['bbox'][1],b['bbox'][0])):
-        box=b['bbox']; row=next((r for r in reversed(rows) if r[0]['region']==b['region'] and b['region']=='body' and b['kind']=='paragraph' and all(c['kind']=='paragraph' and abs(c['bbox'][1]-box[1])<=max(2,min(c['lineHeight'],b['lineHeight'])*.32) and (c['bbox'][2]<=box[0]+.5 or box[2]<=c['bbox'][0]+.5) for c in r)), None)
+        row=next((r for r in reversed(rows) if b['kind']=='paragraph' and b.get('sourceLines',1)==1 and all(c['region']==b['region'] and c['kind']=='paragraph' and c.get('sourceLines',1)==1 and same_line(c,b) for c in r)),None)
         if row is None: rows.append([b])
         else: row.append(b)
     rows.sort(key=lambda r:min(b['bbox'][1] for b in r))
@@ -60,7 +90,7 @@ def parse_pdf(data, filename='resume.pdf'):
     try:
         if doc.needs_pass: raise ValueError('请先解除 PDF 密码')
         if len(doc)>10: raise ValueError('最多支持 10 页 PDF')
-        result={'version':1,'filename':filename,'pages':[],'warnings':[]}
+        result={'version':2,'filename':filename,'pages':[],'warnings':[]}
         for i,page in enumerate(doc):
             width,height=page.rect.width,page.rect.height; blocks=[]; imgs=[]; decorations=[]
             for raw in page.get_text('dict',sort=True)['blocks']:
@@ -95,18 +125,18 @@ def parse_pdf(data, filename='resume.pdf'):
                 region=row[0]['region']; last=prev.get(region)
                 row_top=min(b['bbox'][1] for b in row)
                 row_bottom=max(b['bbox'][3] for b in row)
-                gap=round(max(0,row_top-(last if last is not None else (top if region=='header' or not head else max(v['bbox'][3] for v in head)))),2)
+                gap=round(max(0,row_top-(last if last is not None else (top if region=='header' or not head else max([v['bbox'][3] for v in head]+([photo['bbox'][3]] if photo else []))))),2)
                 for b in row:
                     box=b['bbox']
                     b['gap']=gap
-                    b['indent']=round(max(0,box[0]-(left if region=='body' else 0)),2)
+                    b['indent']=round(max(0,box[0]-left),2)
                     if region=='body' and b['kind']=='heading':
                         for d in page.get_drawings():
                             r=d['rect']
                             if r.width>width*.35 and r.height<=3 and abs(r.y0-box[3])<9 and d.get('color'):
                                 b['rule']='#'+''.join(f'{max(0,min(255,round(v*255))):02x}' for v in d['color'][:3]); break
                 prev[region]=row_bottom
-            result['pages'].append({'width':width,'height':height,'top':max(0,top),'bodyWidth':max(100,min(width,max(right-left+2,width-2*max(0,min(left,width-right))))),'blocks':blocks,'photo':photo,'original': 'data:image/png;base64,'+base64.b64encode(page.get_pixmap(matrix=fitz.Matrix(1.2,1.2),alpha=False).tobytes('png')).decode()})
+            result['pages'].append({'width':width,'height':height,'originalWidth':width,'originalHeight':height,'top':max(0,top),'bodyWidth':max(100,min(width-12,width-2*max(6,min(left,width-right)))),'blocks':blocks,'photo':photo,'original': 'data:image/png;base64,'+base64.b64encode(page.get_pixmap(matrix=fitz.Matrix(1.2,1.2),alpha=False).tobytes('png')).decode()})
         result['warnings']=['PDF 不是段落文档；行段、标题、照片位置由启发式识别。字体缺失、矢量装饰、复杂表格或多栏可能与原稿不同，请对照原图检查。']
         return result
     finally: doc.close()
