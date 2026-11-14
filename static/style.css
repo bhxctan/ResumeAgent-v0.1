@@ -29,3 +29,8 @@
 @media print{.compare-mode aside,#reference-pane,.pane-label{display:none!important}.workbody.compare,.preview-pane,#editor-pane,.paper-area{display:block!important;padding:0!important;margin:0!important;overflow:visible!important;border:0!important;max-width:none!important}.compare .sheet,.sheet{zoom:1!important}.workbody.compare{display:block!important}}
 
 .resume-row.date-fits .date-cell{white-space:nowrap}
+
+#settings-dialog{width:min(840px,94vw);max-height:90vh;overflow:auto}#settings-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}#settings-form>.settings-title,#settings-form>p,#settings-form>.settings-actions{grid-column:1/-1}#settings-form .model-config{min-width:0;border:1px solid #dce4ed;border-radius:10px;padding:12px;margin:0}#settings-form legend{font-weight:700;color:#174b91;padding:0 6px}#settings-form select{display:block;width:100%;margin-top:4px;padding:9px;border:1px solid #cad6e3;border-radius:7px;background:white;color:#24364a;font:inherit}@media(max-width:700px){#settings-form{grid-template-columns:1fr}}
+
+/* v0.8: keep action feedback directly under its own controls. */
+.model-status{margin:10px 0 0;padding:9px 10px;border-radius:6px;font-size:13px;line-height:1.5;overflow-wrap:anywhere;background:#eef4fb;color:#174b91}.model-status[hidden]{display:none}.model-status[data-state="success"],#settings-status[data-state="success"]{color:#187141}.model-status[data-state="success"]{background:#eef8f1}.model-status[data-state="error"],#settings-status[data-state="error"]{color:#a32626}.model-status[data-state="error"]{background:#fff0f0}.model-status[data-state="pending"]{color:#365a7b}#settings-status:empty{display:none}
