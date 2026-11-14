@@ -3,7 +3,7 @@ import base64, re, statistics, uuid
 from collections import Counter
 import fitz
 
-HEAD = re.compile(r'^(教育(?:背景|经历)?|实习(?:经历|经验)?|工作(?:经历|经验)?|项目(?:经历|经验)?|校园(?:经历|实践)?|个人(?:技能|评价|优势|简介)|专业技能|技能(?:证书)?|获奖(?:情况|经历)?|荣誉奖项|自我评价|研究经历|科研经历|求职意向|实践经历|作品集|Education|Experience|Projects|Skills|Summary|Awards|Profile|Research)(?:\s*[:：]?)$', re.I)
+HEAD = re.compile(r'^(教育(?:背景|经历)?|实习(?:经历|经验)?|工作(?:经历|经验)?|项目(?:经历|经验)?|校园(?:经历|实践)?|个人(?:技能|评价|优势|简介)|专业技能|技能(?:证书|荣誉)?|获奖(?:情况|经历)?|荣誉奖项|自我评价|研究经历|科研经历|求职意向|实践经历|作品集|Education|Experience|Projects|Skills|Summary|Awards|Profile|Research)(?:\s*[:：]?)$', re.I)
 def uid(): return uuid.uuid4().hex[:12]
 def color(n): return f'#{n & 0xffffff:06x}'
 def fontname(s): return re.sub(r'^\w{6}\+', '', s or '').replace('"','').replace("'",'')
@@ -38,6 +38,21 @@ def split_text_block(raw):
         prev['last']=bbox
     for b in groups: b.pop('last',None)
     return groups
+
+def assign_rows(blocks):
+    """Keep horizontally separated text on the same visual line in one flow row."""
+    rows=[]
+    for b in sorted(blocks,key=lambda b:(b['bbox'][1],b['bbox'][0])):
+        box=b['bbox']; row=next((r for r in reversed(rows) if r[0]['region']==b['region'] and b['region']=='body' and b['kind']=='paragraph' and all(c['kind']=='paragraph' and abs(c['bbox'][1]-box[1])<=max(2,min(c['lineHeight'],b['lineHeight'])*.32) and (c['bbox'][2]<=box[0]+.5 or box[2]<=c['bbox'][0]+.5) for c in r)), None)
+        if row is None: rows.append([b])
+        else: row.append(b)
+    rows.sort(key=lambda r:min(b['bbox'][1] for b in r))
+    for row in rows:
+        row.sort(key=lambda b:b['bbox'][0])
+        if len(row)>1:
+            ident=uid()
+            for b in row: b['rowId']=ident
+    return rows
 
 def parse_pdf(data, filename='resume.pdf'):
     if len(data)>20*1024*1024: raise ValueError('PDF 超过 20MB')
@@ -74,17 +89,23 @@ def parse_pdf(data, filename='resume.pdf'):
                 blocks.append({'id':im['id'],'kind':'image','region':'body','runs':[],'bbox':im['bbox'],'src':im['src'],'lineHeight':0})
             blocks.sort(key=lambda b:(round(b['bbox'][1]/3),b['bbox'][0]))
             prev={}; top=min([b['bbox'][1] for b in blocks]+([photo['bbox'][1]] if photo else []))
-            for b in blocks:
-                box=b['bbox']; region=b['region']; last=prev.get(region)
-                b['gap']=round(max(0,box[1]-(last['bbox'][3] if last else (top if region=='header' or not head else max(v['bbox'][3] for v in head)))),2)
-                b['indent']=round(max(0,box[0]-(left if region=='body' else 0)),2)
-                if region=='body' and b['kind']=='heading':
-                    # detect nearby horizontal line from PDF vector graphics, recreated as flowing border
-                    for d in page.get_drawings():
-                        r=d['rect']
-                        if r.width>width*.35 and r.height<=3 and abs(r.y0-box[3])<9 and d.get('color'):
-                            b['rule']='#'+''.join(f'{max(0,min(255,round(v*255))):02x}' for v in d['color'][:3]); break
-                prev[region]=b
+            rows=assign_rows(blocks)
+            blocks=[b for row in rows for b in row]
+            for row in rows:
+                region=row[0]['region']; last=prev.get(region)
+                row_top=min(b['bbox'][1] for b in row)
+                row_bottom=max(b['bbox'][3] for b in row)
+                gap=round(max(0,row_top-(last if last is not None else (top if region=='header' or not head else max(v['bbox'][3] for v in head)))),2)
+                for b in row:
+                    box=b['bbox']
+                    b['gap']=gap
+                    b['indent']=round(max(0,box[0]-(left if region=='body' else 0)),2)
+                    if region=='body' and b['kind']=='heading':
+                        for d in page.get_drawings():
+                            r=d['rect']
+                            if r.width>width*.35 and r.height<=3 and abs(r.y0-box[3])<9 and d.get('color'):
+                                b['rule']='#'+''.join(f'{max(0,min(255,round(v*255))):02x}' for v in d['color'][:3]); break
+                prev[region]=row_bottom
             result['pages'].append({'width':width,'height':height,'top':max(0,top),'bodyWidth':max(100,min(width,max(right-left+2,width-2*max(0,min(left,width-right))))),'blocks':blocks,'photo':photo,'original': 'data:image/png;base64,'+base64.b64encode(page.get_pixmap(matrix=fitz.Matrix(1.2,1.2),alpha=False).tobytes('png')).decode()})
         result['warnings']=['PDF 不是段落文档；行段、标题、照片位置由启发式识别。字体缺失、矢量装饰、复杂表格或多栏可能与原稿不同，请对照原图检查。']
         return result
